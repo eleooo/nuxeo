@@ -115,7 +115,7 @@
     var dataToStore = JSON.stringify(data);
     var $form = jQuery(this);
     if (dataToStore == $form.data('lastSavedJSONData')) {
-      console.log("skip save ... no change");
+      //console.log("skip save ... no change");
     } else {
       localStorage.setItem(jQuery(this).data('key'), dataToStore);
       $form.data('lastSavedJSONData', dataToStore);
@@ -132,7 +132,7 @@
   }
 
   $.fn.cleanupSavedData = function() {
-    console.log("Cleanup custom storage");
+    //console.log("Cleanup custom storage");
     localStorage.removeItem(jQuery(this).data('key'));
     window.clearTimeout(saveFormFunc);
   }
