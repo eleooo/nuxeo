@@ -47,7 +47,6 @@ public class TestOffice2html extends BaseConverterTest {
 
         BlobHolder hg = getBlobFromPath("test-docs/" + fileName, srcMT);
         Map<String, Serializable> parameters = new HashMap<>();
-        parameters.put("format", "html");
 
         BlobHolder result = cs.convert(converterName, hg, parameters);
         assertNotNull(result);

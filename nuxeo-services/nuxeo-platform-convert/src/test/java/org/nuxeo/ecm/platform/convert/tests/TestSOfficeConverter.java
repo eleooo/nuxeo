@@ -50,7 +50,6 @@ public class TestSOfficeConverter extends BaseConverterTest {
 
         BlobHolder pdfBH = getBlobFromPath("test-docs/hello.txt");
         Map<String, Serializable> parameters = new HashMap<>();
-        parameters.put("format", "pdf");
 
         BlobHolder result = cs.convert(converterName, pdfBH, parameters);
         assertNotNull(result);

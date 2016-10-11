@@ -82,6 +82,7 @@
 
       <parameters>
         <parameter name="CommandLineName">soffice</parameter>
+        <parameter name="format">ods</parameter>
       </parameters>
 
     </converter>
@@ -108,6 +109,7 @@
 
       <parameters>
         <parameter name="CommandLineName">soffice</parameter>
+        <parameter name="format">odp</parameter>
       </parameters>
 
     </converter>
@@ -179,6 +181,7 @@
 
       <parameters>
         <parameter name="CommandLineName">soffice</parameter>
+        <parameter name="format">pdf</parameter>
       </parameters>
     </converter>
 
@@ -245,6 +248,7 @@
 
       <parameters>
         <parameter name="CommandLineName">soffice</parameter>
+        <parameter name="format">html</parameter>
       </parameters>
 
     </converter>
