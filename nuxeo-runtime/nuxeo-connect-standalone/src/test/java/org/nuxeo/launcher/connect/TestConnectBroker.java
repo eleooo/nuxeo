@@ -29,10 +29,20 @@ import java.util.List;
 import java.util.Map;
 
 import org.apache.commons.io.FileUtils;
+import org.apache.http.HttpEntity;
+import org.apache.http.HttpException;
+import org.apache.http.HttpRequest;
+import org.apache.http.HttpResponse;
+import org.apache.http.HttpStatus;
+import org.apache.http.entity.FileEntity;
+import org.apache.http.localserver.LocalServerTestBase;
+import org.apache.http.protocol.HttpContext;
+import org.apache.http.protocol.HttpRequestHandler;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.nuxeo.common.Environment;
+import org.nuxeo.common.utils.ZipUtils;
 import org.nuxeo.connect.NuxeoConnectClient;
 import org.nuxeo.connect.update.PackageState;
 import org.nuxeo.launcher.config.TomcatConfigurator;
@@ -41,34 +51,75 @@ import org.nuxeo.launcher.connect.fake.LocalConnectFakeConnector;
 /**
  * @since 8.4
  */
-public class TestConnectBroker {
+public class TestConnectBroker extends LocalServerTestBase {
+
+    final File testStore = new File("src/test/resources/packages/store");
+
+    final File nuxeoHome = new File("target/launcher");
 
     @Before
-    public void setUp() throws IOException {
+    public void beforeEach() throws Exception {
         // set fake Connect connector
-        // TODO The fake connector is not really useful in those tests because all packages are already in the local
-        // store. We must add tests for package requests that need to download packages.
-        String addonJSON = FileUtils.readFileToString(new File("src/test/resources/packages/addon_remote.json"));
-        String hotfixJSON = FileUtils.readFileToString(new File("src/test/resources/packages/hotfix_remote.json"));
-        String studioJSON = FileUtils.readFileToString(new File("src/test/resources/packages/studio_remote.json"));
+        String addonJSON = FileUtils.readFileToString(new File(testStore, "addon_remote.json"));
+        String hotfixJSON = FileUtils.readFileToString(new File(testStore, "hotfix_remote.json"));
+        String studioJSON = FileUtils.readFileToString(new File(testStore, "studio_remote.json"));
         NuxeoConnectClient.getConnectGatewayComponent().setTestConnector(
                 new LocalConnectFakeConnector(addonJSON, hotfixJSON, studioJSON));
 
         // build env
         Environment.setDefault(null);
-        File nuxeoHome = new File("target/launcher");
         FileUtils.deleteQuietly(nuxeoHome);
         nuxeoHome.mkdirs();
         System.setProperty(Environment.NUXEO_HOME, nuxeoHome.getPath());
         System.setProperty(TomcatConfigurator.TOMCAT_HOME, Environment.getDefault().getServerHome().getPath());
 
         // build test packages store
-        File testStore = new File("src/test/resources/packages");
-        FileUtils.copyDirectory(testStore, new File(nuxeoHome, "packages"));
+        buildInitialPackageStore();
+
+        // start fake connect server for package downloads
+        startFakeConnectServer();
+    }
+
+    private void buildInitialPackageStore() throws IOException {
+        File nuxeoPackages = new File(nuxeoHome, "packages");
+        File nuxeoStrore = new File(nuxeoPackages, "store");
+        File uninstallFile = new File(testStore, "uninstall.xml");
+        FileUtils.iterateFiles(testStore, new String[] { "zip" }, false).forEachRemaining(pkgZip -> {
+            try {
+                File pkgDir = new File(nuxeoStrore, pkgZip.getName().replace(".zip", ""));
+                ZipUtils.unzip(pkgZip, pkgDir);
+                FileUtils.copyFileToDirectory(uninstallFile, pkgDir);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        });
+        FileUtils.copyFileToDirectory(new File(testStore, ".packages"), nuxeoPackages);
+    }
+
+    private void startFakeConnectServer() throws Exception {
+        serverBootstrap.registerHandler("/test/*", new HttpRequestHandler() {
+
+            @Override
+            public void handle(HttpRequest request, HttpResponse response, HttpContext context)
+                    throws HttpException, IOException {
+                String requestUri = request.getRequestLine().getUri();
+                String pkgId = requestUri.substring(requestUri.lastIndexOf("/") + 1);
+                File pkgZip = new File(testStore, pkgId + ".zip");
+                if (pkgZip.exists()) {
+                    HttpEntity entity = new FileEntity(pkgZip);
+                    response.setEntity(entity);
+                    response.setStatusCode(HttpStatus.SC_OK);
+                } else {
+                    response.setStatusCode(HttpStatus.SC_NOT_FOUND);
+                }
+            }
+        });
+        serverBootstrap.setListenerPort(8082);
+        start();
     }
 
     @After
-    public void tearDown() {
+    public void afterEach() {
         // clear system properties
         System.clearProperty(Environment.NUXEO_HOME);
         System.clearProperty(TomcatConfigurator.TOMCAT_HOME);
@@ -128,6 +179,49 @@ public class TestConnectBroker {
                 Arrays.asList("studioA-1.0.1", "studioA-1.0.2-SNAPSHOT", "hfB-1.0.0", "hfC-1.0.0-SNAPSHOT", "A-1.0.0",
                         "A-1.2.1-SNAPSHOT", "A-1.2.0", "A-1.2.2", "A-1.2.3-SNAPSHOT", "B-1.0.1-SNAPSHOT", "B-1.0.1",
                         "C-1.0.1-SNAPSHOT", "C-1.0.0", "D-1.0.3-SNAPSHOT", "D-1.0.4-SNAPSHOT"),
+                PackageState.DOWNLOADED);
+    }
+
+    @Test
+    public void testReInstallPackageRequest() throws Exception {
+        Environment.getDefault().setProperty(Environment.DISTRIBUTION_NAME, "server");
+        Environment.getDefault().setProperty(Environment.DISTRIBUTION_VERSION, "8.3");
+        ConnectBroker connectBrocker = new ConnectBroker(Environment.getDefault());
+        ((StandaloneCallbackHolder) NuxeoConnectClient.getCallBackHolder()).setTestMode(true);
+        connectBrocker.setAllowSNAPSHOT(false);
+
+        // Before: [studioA-1.0.0, hfA-1.0.0, A-1.0.0, B-1.0.1-SNAPSHOT, C-1.0.0, D-1.0.2-SNAPSHOT]
+        checkPackagesState(connectBrocker, Arrays.asList("studioA-1.0.0", "hfA-1.0.0", "A-1.0.0", "B-1.0.1-SNAPSHOT",
+                "C-1.0.0", "D-1.0.2-SNAPSHOT"), PackageState.STARTED);
+        checkPackagesState(connectBrocker,
+                Arrays.asList("studioA-1.0.1", "studioA-1.0.2-SNAPSHOT", "hfB-1.0.0", "hfC-1.0.0-SNAPSHOT", "A-1.2.0",
+                        "A-1.2.1-SNAPSHOT", "A-1.2.2-SNAPSHOT", "A-1.2.2", "A-1.2.3-SNAPSHOT", "B-1.0.1", "B-1.0.2",
+                        "C-1.0.1-SNAPSHOT", "C-1.0.2-SNAPSHOT", "D-1.0.3-SNAPSHOT", "D-1.0.4-SNAPSHOT"),
+                PackageState.DOWNLOADED);
+
+        // A-1.0.0 is a release and is already installed
+        assertThat(connectBrocker.pkgRequest(null, Arrays.asList("A-1.0.0"), null, null, true, false)).isTrue();
+
+        // Before: [studioA-1.0.0, hfA-1.0.0, A-1.0.0, B-1.0.1-SNAPSHOT, C-1.0.0, D-1.0.2-SNAPSHOT]
+        checkPackagesState(connectBrocker, Arrays.asList("studioA-1.0.0", "hfA-1.0.0", "A-1.0.0", "B-1.0.1-SNAPSHOT",
+                "C-1.0.0", "D-1.0.2-SNAPSHOT"), PackageState.STARTED);
+        checkPackagesState(connectBrocker,
+                Arrays.asList("studioA-1.0.1", "studioA-1.0.2-SNAPSHOT", "hfB-1.0.0", "hfC-1.0.0-SNAPSHOT", "A-1.2.0",
+                        "A-1.2.1-SNAPSHOT", "A-1.2.2-SNAPSHOT", "A-1.2.2", "A-1.2.3-SNAPSHOT", "B-1.0.1", "B-1.0.2",
+                        "C-1.0.1-SNAPSHOT", "C-1.0.2-SNAPSHOT", "D-1.0.3-SNAPSHOT", "D-1.0.4-SNAPSHOT"),
+                PackageState.DOWNLOADED);
+
+        // B-1.0.1-SNAPSHOT must be uninstall then reinstall as it is a SNAPSHOT
+        assertThat(
+                connectBrocker.pkgRequest(null, Arrays.asList("B-1.0.1-SNAPSHOT"), null, null, true, false)).isTrue();
+
+        // Before: [studioA-1.0.0, hfA-1.0.0, A-1.0.0, B-1.0.1-SNAPSHOT, C-1.0.0, D-1.0.2-SNAPSHOT]
+        checkPackagesState(connectBrocker, Arrays.asList("studioA-1.0.0", "hfA-1.0.0", "A-1.0.0", "B-1.0.1-SNAPSHOT",
+                "C-1.0.0", "D-1.0.2-SNAPSHOT"), PackageState.STARTED);
+        checkPackagesState(connectBrocker,
+                Arrays.asList("studioA-1.0.1", "studioA-1.0.2-SNAPSHOT", "hfB-1.0.0", "hfC-1.0.0-SNAPSHOT", "A-1.2.0",
+                        "A-1.2.1-SNAPSHOT", "A-1.2.2-SNAPSHOT", "A-1.2.2", "A-1.2.3-SNAPSHOT", "B-1.0.1", "B-1.0.2",
+                        "C-1.0.1-SNAPSHOT", "C-1.0.2-SNAPSHOT", "D-1.0.3-SNAPSHOT", "D-1.0.4-SNAPSHOT"),
                 PackageState.DOWNLOADED);
     }
 

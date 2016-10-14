@@ -1228,6 +1228,13 @@ public class ConnectBroker {
                 // id
                 List<String> namesOrIdsToInstall = new ArrayList<>();
                 for (String pkgToInstall : pkgsToInstall) {
+                    // if a local SNAPSHOT package is installed, uninstall it
+                    DownloadablePackage localPackage = getPackageManager().getLocalPackage(pkgToInstall);
+                    boolean localSnapshotToReplace = false;
+                    if(localPackage != null && localPackage.getVersion().isSnapshot() && localPackage.getPackageState().isInstalled()){
+                        pkgUninstall(pkgToInstall);
+                        localSnapshotToReplace = true;
+                    }
                     if (isLocalPackageFile(pkgToInstall)) {
                         LocalPackage addedPkg = pkgAdd(pkgToInstall, ignoreMissing);
                         if (addedPkg != null) {
@@ -1237,6 +1244,9 @@ public class ConnectBroker {
                         }
                         // TODO: set flag to prefer local package
                     } else {
+                        if(localSnapshotToReplace){
+                            pkgAdd(pkgToInstall, ignoreMissing);
+                        }
                         namesOrIdsToInstall.add(pkgToInstall);
                     }
                 }
